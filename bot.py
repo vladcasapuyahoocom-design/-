@@ -1,10 +1,3 @@
-from pathlib import Path
-import textwrap, zipfile, os, json, re
-
-base = Path("/mnt/data/discord_full_bot")
-base.mkdir(parents=True, exist_ok=True)
-
-bot_code = r'''
 import os
 import random
 import sqlite3
@@ -757,49 +750,3 @@ async def setup_verificare(
 
 
 bot.run(TOKEN)
-'''
-
-requirements = """discord.py>=2.4,<3
-aiohttp>=3.9,<4
-"""
-
-readme = """# Discord Full Bot
-
-## Comenzi
-- Moderare: /ban, /kick, /clear, /timeout, /untimeout, /warn, /warnings, /unwarn
-- Giveaway: /gcreate, /gend, /reroll
-- Utilitare: /embed, /help
-- Economie: /balance, /daily, /work, /shop, /buy, /leaderboard, /setcoins, /addcoins, /removecoins, /resetcoins
-- Reputație: /rep add, /rep remove, /rep check, /rep leaderboard
-- Distracție: /dog, /cat, /meme
-- Verificare: /setup-verificare
-
-## Railway
-1. Pune `bot.py` și `requirements.txt` în repository.
-2. În Railway adaugă variabila `DISCORD_TOKEN`.
-3. În Discord Developer Portal activează:
-   - Server Members Intent
-   - Message Content Intent
-4. Invită botul cu scope-urile:
-   - bot
-   - applications.commands
-5. Acordă-i Administrator sau permisiunile necesare.
-6. Rolul botului trebuie să fie deasupra rolurilor pe care le administrează.
-
-## Observații
-- Economia, reputația și avertismentele folosesc SQLite (`bot.db`).
-- Pe Railway, pentru păstrarea bazei de date după redeploy, montează un Volume și setează DB_PATH către acel volum dacă dorești persistență completă.
-- Giveaway-urile active sunt ținute în memorie și se pierd dacă botul este repornit.
-"""
-
-(base / "bot.py").write_text(bot_code.strip() + "\n", encoding="utf-8")
-(base / "requirements.txt").write_text(requirements, encoding="utf-8")
-(base / "README.md").write_text(readme, encoding="utf-8")
-
-zip_path = Path("/mnt/data/discord_full_bot.zip")
-with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-    for p in base.iterdir():
-        z.write(p, arcname=p.name)
-
-print(zip_path)
-
