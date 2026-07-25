@@ -26,10 +26,9 @@ giveaways: dict[int, dict] = {}
 last_giveaway_winner: dict[int, int] = {}
 
 SHOP_ITEMS = {
-    "telefon": 500,
-    "laptop": 1500,
-    "masina": 5000,
     "vip": 10000,
+    "mvp": 25000,
+    "elite": 50000,
 }
 
 
@@ -526,8 +525,12 @@ async def work(interaction: discord.Interaction):
 
 @bot.tree.command(name="shop", description="Arată magazinul")
 async def shop(interaction: discord.Interaction):
-    text = "\n".join(f"• **{name}** — {price} coins" for name, price in SHOP_ITEMS.items())
-    await interaction.response.send_message(f"🛒 **Magazin**\n{text}")
+    embed = discord.Embed(title="🛒 Magazin", color=discord.Color.blue())
+    embed.add_field(name="👑 VIP", value="**10.000 coins**", inline=False)
+    embed.add_field(name="💎 MVP", value="**25.000 coins**", inline=False)
+    embed.add_field(name="🔥 ELITE", value="**50.000 coins**", inline=False)
+    embed.set_footer(text="Folosește /buy <vip | mvp | elite>")
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="buy", description="Cumpără un obiect")
