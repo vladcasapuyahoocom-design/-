@@ -1,4 +1,4 @@
-import os
+aimport os
 import random
 import sqlite3
 import asyncio
@@ -487,7 +487,7 @@ async def daily(interaction: discord.Interaction):
                     ephemeral=True,
                 )
                 return
-        reward = random.randint(150, 300)
+        reward = random.randint(500, 1500)
         con.execute(
             "UPDATE economy SET coins=coins+?, last_daily=? WHERE guild_id=? AND user_id=?",
             (reward, now.isoformat(), interaction.guild.id, interaction.user.id),
