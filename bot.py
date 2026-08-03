@@ -14,11 +14,6 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("Lipsește variabila DISCORD_TOKEN.")
 
-# Opțional: dacă setezi GUILD_ID, comenzile se sincronizează instant pe acel
-# server (util pentru testare). Dacă lipsește, sincronizarea rămâne globală
-# (poate dura până la 1 oră să apară peste tot).
-GUILD_ID = os.getenv("GUILD_ID")
-
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -311,14 +306,8 @@ async def on_ready():
     bot.add_view(TicketView())
     bot.add_view(CloseTicketView())
     try:
-        if GUILD_ID:
-            guild = discord.Object(id=int(GUILD_ID))
-            bot.tree.copy_global_to(guild=guild)
-            synced = await bot.tree.sync(guild=guild)
-            print(f"Sincronizate {len(synced)} comenzi slash pe serverul {GUILD_ID} (instant).")
-        else:
-            synced = await bot.tree.sync()
-            print(f"Sincronizate {len(synced)} comenzi slash global (poate dura până la 1 oră să apară).")
+        synced = await bot.tree.sync()
+        print(f"Sincronizate {len(synced)} comenzi slash.")
     except Exception as exc:
         print(f"Eroare la sincronizare: {exc}")
     print(f"{bot.user} este online!")
