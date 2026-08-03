@@ -363,8 +363,24 @@ async def setup_welcome(interaction: discord.Interaction, canal: discord.TextCha
                ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id""",
             (interaction.guild.id, canal.id),
         )
+
+    preview = discord.Embed(
+        title="❄️ Bun venit pe Glacial!",
+        description=(
+            "Salut, @membru! 🧊\n"
+            "Ești al **#N**-lea membru pe **Glacial**.\n\n"
+            "📜 Citește regulamentul și distrează-te alături de comunitate!\n"
+            "💬 Dacă ai nevoie de ajutor, echipa de staff este mereu aici pentru tine."
+        ),
+        color=discord.Color.from_rgb(120, 200, 255),
+    )
+    preview.add_field(name="👥 Membri", value="#N", inline=True)
+    preview.add_field(name="📅 Cont creat", value="dd/mm/yyyy", inline=True)
+    preview.set_footer(text="Glacial • Welcome System")
+    await canal.send(embed=preview)
+
     await interaction.response.send_message(
-        f"✅ Mesajele de bun venit vor fi trimise în {canal.mention}.",
+        f"✅ Canalul de bun venit a fost setat la {canal.mention}. Am trimis și un preview acolo.",
         ephemeral=True,
     )
 
