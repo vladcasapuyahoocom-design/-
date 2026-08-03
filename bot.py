@@ -4,40 +4,45 @@ import sqlite3
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
- 
+
 import aiohttp
 import discord
 from discord.ext import commands
 from discord import app_commands
- 
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("Lipsește variabila DISCORD_TOKEN.")
- 
+
+# Opțional: dacă setezi GUILD_ID, comenzile se sincronizează instant pe acel
+# server (util pentru testare). Dacă lipsește, sincronizarea rămâne globală
+# (poate dura până la 1 oră să apară peste tot).
+GUILD_ID = os.getenv("GUILD_ID")
+
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
- 
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 DB_PATH = "bot.db"
- 
+
 # giveaway_message_id -> date
 giveaways: dict[int, dict] = {}
 last_giveaway_winner: dict[int, int] = {}
- 
+
 SHOP_ITEMS = {
     "vip": 10000,
     "mvp": 25000,
     "elite": 50000,
 }
- 
- 
+
+
 def db() -> sqlite3.Connection:
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     return con
- 
- 
+
+
 def init_db() -> None:
     with db() as con:
         con.execute("""
@@ -98,16 +103,16 @@ def init_db() -> None:
                 channel_id INTEGER NOT NULL
             )
         """)
- 
- 
+
+
 def ensure_economy(guild_id: int, user_id: int) -> None:
     with db() as con:
         con.execute(
             "INSERT OR IGNORE INTO economy (guild_id, user_id, coins) VALUES (?, ?, 0)",
             (guild_id, user_id),
         )
- 
- 
+
+
 def get_coins(guild_id: int, user_id: int) -> int:
     ensure_economy(guild_id, user_id)
     with db() as con:
@@ -116,8 +121,8 @@ def get_coins(guild_id: int, user_id: int) -> int:
             (guild_id, user_id),
         ).fetchone()
     return int(row["coins"])
- 
- 
+
+
 def set_coins_db(guild_id: int, user_id: int, amount: int) -> None:
     ensure_economy(guild_id, user_id)
     with db() as con:
@@ -125,19 +130,19 @@ def set_coins_db(guild_id: int, user_id: int, amount: int) -> None:
             "UPDATE economy SET coins=? WHERE guild_id=? AND user_id=?",
             (max(0, amount), guild_id, user_id),
         )
- 
- 
+
+
 def add_coins_db(guild_id: int, user_id: int, amount: int) -> int:
     current = get_coins(guild_id, user_id)
     new_amount = max(0, current + amount)
     set_coins_db(guild_id, user_id, new_amount)
     return new_amount
- 
- 
+
+
 def is_admin(member: discord.Member) -> bool:
     return member.guild_permissions.administrator
- 
- 
+
+
 def can_moderate(actor: discord.Member, target: discord.Member, guild: discord.Guild) -> tuple[bool, str]:
     if target == guild.owner:
         return False, "Nu poți modera proprietarul serverului."
@@ -148,8 +153,8 @@ def can_moderate(actor: discord.Member, target: discord.Member, guild: discord.G
     if actor != guild.owner and actor.top_role <= target.top_role:
         return False, "Rolul tău trebuie să fie deasupra rolului membrului."
     return True, ""
- 
- 
+
+
 async def require_admin(interaction: discord.Interaction) -> bool:
     if not isinstance(interaction.user, discord.Member) or not is_admin(interaction.user):
         await interaction.response.send_message(
@@ -158,12 +163,12 @@ async def require_admin(interaction: discord.Interaction) -> bool:
         )
         return False
     return True
- 
- 
+
+
 class VerifyView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
- 
+
     @discord.ui.button(
         label="Verifică-te",
         style=discord.ButtonStyle.success,
@@ -196,12 +201,12 @@ class VerifyView(discord.ui.View):
                 "❌ Botul nu poate adăuga rolul. Mută rolul botului deasupra rolului de verificare.",
                 ephemeral=True,
             )
- 
- 
+
+
 class CloseTicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
- 
+
     @discord.ui.button(
         label="Închide ticketul",
         style=discord.ButtonStyle.danger,
@@ -218,12 +223,12 @@ class CloseTicketView(discord.ui.View):
         await interaction.response.send_message("🔒 Ticketul se va închide în 5 secunde.")
         await asyncio.sleep(5)
         await interaction.channel.delete(reason=f"Ticket închis de {interaction.user}")
- 
- 
+
+
 class TicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
- 
+
     @discord.ui.button(
         label="Creează un ticket",
         style=discord.ButtonStyle.primary,
@@ -233,17 +238,17 @@ class TicketView(discord.ui.View):
     async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
             return
- 
+
         with db() as con:
             config = con.execute(
                 "SELECT support_role_id, category_id FROM ticket_config WHERE guild_id=?",
                 (interaction.guild.id,),
             ).fetchone()
- 
+
         if not config:
             await interaction.response.send_message("❌ Sistemul de ticket nu este configurat.", ephemeral=True)
             return
- 
+
         topic = f"ticket_owner:{interaction.user.id}"
         existing = discord.utils.find(
             lambda channel: isinstance(channel, discord.TextChannel) and channel.topic == topic,
@@ -254,13 +259,13 @@ class TicketView(discord.ui.View):
                 f"❌ Ai deja un ticket deschis: {existing.mention}", ephemeral=True
             )
             return
- 
+
         support_role = interaction.guild.get_role(int(config["support_role_id"]))
         category = interaction.guild.get_channel(int(config["category_id"])) if config["category_id"] else None
         if support_role is None:
             await interaction.response.send_message("❌ Rolul de suport nu mai există.", ephemeral=True)
             return
- 
+
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
             interaction.user: discord.PermissionOverwrite(
@@ -274,7 +279,7 @@ class TicketView(discord.ui.View):
             overwrites[interaction.guild.me] = discord.PermissionOverwrite(
                 view_channel=True, send_messages=True, manage_channels=True
             )
- 
+
         try:
             channel = await interaction.guild.create_text_channel(
                 name=f"ticket-{interaction.user.name}"[:100],
@@ -288,7 +293,7 @@ class TicketView(discord.ui.View):
                 "❌ Botul nu are permisiunea Manage Channels.", ephemeral=True
             )
             return
- 
+
         await channel.send(
             f"{interaction.user.mention} {support_role.mention}\n"
             "Bine ai venit! Explică problema cât mai clar și așteaptă răspunsul echipei.",
@@ -297,8 +302,8 @@ class TicketView(discord.ui.View):
         await interaction.response.send_message(
             f"✅ Ticketul tău a fost creat: {channel.mention}", ephemeral=True
         )
- 
- 
+
+
 @bot.event
 async def on_ready():
     init_db()
@@ -306,15 +311,21 @@ async def on_ready():
     bot.add_view(TicketView())
     bot.add_view(CloseTicketView())
     try:
-        synced = await bot.tree.sync()
-        print(f"Sincronizate {len(synced)} comenzi slash.")
+        if GUILD_ID:
+            guild = discord.Object(id=int(GUILD_ID))
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"Sincronizate {len(synced)} comenzi slash pe serverul {GUILD_ID} (instant).")
+        else:
+            synced = await bot.tree.sync()
+            print(f"Sincronizate {len(synced)} comenzi slash global (poate dura până la 1 oră să apară).")
     except Exception as exc:
         print(f"Eroare la sincronizare: {exc}")
     print(f"{bot.user} este online!")
- 
- 
+
+
 # ---------------- BUN VENIT ----------------
- 
+
 @bot.event
 async def on_member_join(member: discord.Member):
     with db() as con:
@@ -327,10 +338,10 @@ async def on_member_join(member: discord.Member):
     channel = member.guild.get_channel(int(row["channel_id"]))
     if not isinstance(channel, discord.TextChannel):
         return
- 
+
     created_at = discord.utils.format_dt(member.created_at, style="F")
     member_count = member.guild.member_count
- 
+
     embed = discord.Embed(
         title="❄️ Bun venit pe Glacial!",
         description=(
@@ -345,13 +356,13 @@ async def on_member_join(member: discord.Member):
     embed.add_field(name="📅 Cont creat", value=created_at, inline=True)
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text="Glacial • Welcome System")
- 
+
     try:
         await channel.send(content=member.mention, embed=embed)
     except discord.Forbidden:
         pass
- 
- 
+
+
 @bot.tree.command(name="setup-welcome", description="Configurează canalul de bun venit")
 @app_commands.describe(canal="Canalul unde vor apărea mesajele de bun venit")
 async def setup_welcome(interaction: discord.Interaction, canal: discord.TextChannel):
@@ -367,10 +378,10 @@ async def setup_welcome(interaction: discord.Interaction, canal: discord.TextCha
         f"✅ Mesajele de bun venit vor fi trimise în {canal.mention}.",
         ephemeral=True,
     )
- 
- 
+
+
 # ---------------- MODERARE ----------------
- 
+
 @bot.tree.command(name="setup-ticket", description="Configurează și trimite panoul de ticket")
 @app_commands.describe(
     rol_suport="Rolul care poate vedea și răspunde la tickete",
@@ -385,7 +396,7 @@ async def setup_ticket(
         return
     if interaction.guild is None:
         return
- 
+
     with db() as con:
         con.execute(
             """INSERT INTO ticket_config (guild_id, support_role_id, category_id)
@@ -395,7 +406,7 @@ async def setup_ticket(
                category_id=excluded.category_id""",
             (interaction.guild.id, rol_suport.id, categorie.id if categorie else None),
         )
- 
+
     embed = discord.Embed(
         title="🎫 Suport & Asistență",
         description=(
@@ -407,7 +418,7 @@ async def setup_ticket(
         color=discord.Color.blurple(),
     )
     await interaction.response.send_message(embed=embed, view=TicketView())
- 
+
 @bot.tree.command(name="ban", description="Banează un membru")
 @app_commands.describe(membru="Membrul", motiv="Motivul")
 async def ban(interaction: discord.Interaction, membru: discord.Member, motiv: str = "Fără motiv"):
@@ -422,8 +433,8 @@ async def ban(interaction: discord.Interaction, membru: discord.Member, motiv: s
         await interaction.response.send_message(f"🔨 {membru.mention} a fost banat.\nMotiv: **{motiv}**")
     except discord.Forbidden:
         await interaction.response.send_message("❌ Botul nu are permisiunea necesară.", ephemeral=True)
- 
- 
+
+
 @bot.tree.command(name="kick", description="Dă afară un membru")
 @app_commands.describe(membru="Membrul", motiv="Motivul")
 async def kick(interaction: discord.Interaction, membru: discord.Member, motiv: str = "Fără motiv"):
@@ -438,8 +449,8 @@ async def kick(interaction: discord.Interaction, membru: discord.Member, motiv: 
         await interaction.response.send_message(f"👢 {membru.mention} a fost dat afară.\nMotiv: **{motiv}**")
     except discord.Forbidden:
         await interaction.response.send_message("❌ Botul nu are permisiunea necesară.", ephemeral=True)
- 
- 
+
+
 @bot.tree.command(name="clear", description="Șterge mesaje din canal")
 @app_commands.describe(numar="Număr de mesaje, maximum 100")
 async def clear(interaction: discord.Interaction, numar: app_commands.Range[int, 1, 100]):
@@ -451,8 +462,8 @@ async def clear(interaction: discord.Interaction, numar: app_commands.Range[int,
     await interaction.response.defer(ephemeral=True)
     deleted = await interaction.channel.purge(limit=numar)
     await interaction.followup.send(f"🧹 Am șters **{len(deleted)}** mesaje.", ephemeral=True)
- 
- 
+
+
 @bot.tree.command(name="timeout", description="Pune un membru în timeout")
 @app_commands.describe(membru="Membrul", minute="Durata în minute", motiv="Motivul")
 async def timeout_cmd(
@@ -471,8 +482,8 @@ async def timeout_cmd(
     await interaction.response.send_message(
         f"⏳ {membru.mention} a primit timeout pentru **{minute} minute**.\nMotiv: **{motiv}**"
     )
- 
- 
+
+
 @bot.tree.command(name="untimeout", description="Elimină timeout-ul unui membru")
 async def untimeout(interaction: discord.Interaction, membru: discord.Member):
     if not await require_admin(interaction):
@@ -483,8 +494,8 @@ async def untimeout(interaction: discord.Interaction, membru: discord.Member):
         return
     await membru.timeout(None, reason=f"Scos de {interaction.user}")
     await interaction.response.send_message(f"✅ Timeout eliminat pentru {membru.mention}.")
- 
- 
+
+
 @bot.tree.command(name="warn", description="Avertizează un membru")
 @app_commands.describe(membru="Membrul", motiv="Motivul")
 async def warn(interaction: discord.Interaction, membru: discord.Member, motiv: str):
@@ -500,8 +511,8 @@ async def warn(interaction: discord.Interaction, membru: discord.Member, motiv: 
     except discord.Forbidden:
         pass
     await interaction.response.send_message(f"⚠️ {membru.mention} a primit avertisment.\nMotiv: **{motiv}**")
- 
- 
+
+
 @bot.tree.command(name="warnings", description="Arată avertismentele unui membru")
 async def warnings_cmd(interaction: discord.Interaction, membru: discord.Member):
     if not await require_admin(interaction):
@@ -516,8 +527,8 @@ async def warnings_cmd(interaction: discord.Interaction, membru: discord.Member)
         return
     text = "\n".join(f"`#{r['id']}` {r['reason']}" for r in rows[:20])
     await interaction.response.send_message(f"⚠️ Avertismente pentru {membru.mention}:\n{text}", ephemeral=True)
- 
- 
+
+
 @bot.tree.command(name="unwarn", description="Șterge un avertisment după ID")
 @app_commands.describe(id_avertisment="ID-ul afișat de /warnings")
 async def unwarn(interaction: discord.Interaction, id_avertisment: int):
@@ -534,10 +545,10 @@ async def unwarn(interaction: discord.Interaction, id_avertisment: int):
         await interaction.response.send_message("❌ Avertismentul nu există.", ephemeral=True)
         return
     await interaction.response.send_message(f"✅ Avertismentul `#{id_avertisment}` a fost șters.")
- 
- 
+
+
 # ---------------- GIVEAWAY ----------------
- 
+
 @bot.tree.command(name="gcreate", description="Creează un giveaway")
 @app_commands.describe(
     premiu="Premiul",
@@ -570,8 +581,8 @@ async def gcreate(
     await asyncio.sleep(minute * 60)
     if message.id in giveaways:
         await finish_giveaway(interaction.guild, message.id)
- 
- 
+
+
 async def finish_giveaway(guild: discord.Guild, message_id: int):
     data = giveaways.pop(message_id, None)
     if not data:
@@ -596,8 +607,8 @@ async def finish_giveaway(guild: discord.Guild, message_id: int):
     last_giveaway_winner[message_id] = winners[0].id
     mentions = ", ".join(user.mention for user in winners)
     await channel.send(f"🏆 Câștigător(i): {mentions}\nPremiu: **{data['prize']}**")
- 
- 
+
+
 @bot.tree.command(name="gend", description="Încheie un giveaway după ID-ul mesajului")
 async def gend(interaction: discord.Interaction, id_mesaj: str):
     if not await require_admin(interaction):
@@ -613,8 +624,8 @@ async def gend(interaction: discord.Interaction, id_mesaj: str):
         return
     await finish_giveaway(interaction.guild, message_id)
     await interaction.followup.send("✅ Giveaway încheiat.", ephemeral=True)
- 
- 
+
+
 @bot.tree.command(name="reroll", description="Alege alt câștigător pentru un giveaway")
 async def reroll(interaction: discord.Interaction, id_mesaj: str):
     if not await require_admin(interaction):
@@ -636,10 +647,10 @@ async def reroll(interaction: discord.Interaction, id_mesaj: str):
         return
     winner = random.choice(users)
     await interaction.response.send_message(f"🔁 Noul câștigător este {winner.mention}!")
- 
- 
+
+
 # ---------------- UTILITARE ----------------
- 
+
 @bot.tree.command(name="embed", description="Trimite un mesaj embed")
 @app_commands.describe(titlu="Titlul", mesaj="Conținutul", culoare_hex="Exemplu: 5865F2")
 async def embed_cmd(interaction: discord.Interaction, titlu: str, mesaj: str, culoare_hex: str = "5865F2"):
@@ -652,8 +663,8 @@ async def embed_cmd(interaction: discord.Interaction, titlu: str, mesaj: str, cu
     embed = discord.Embed(title=titlu, description=mesaj, color=color)
     embed.set_footer(text=f"Trimis de {interaction.user}")
     await interaction.response.send_message(embed=embed)
- 
- 
+
+
 @bot.tree.command(name="help", description="Arată toate comenzile")
 async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(title="📚 Comenzile botului", color=discord.Color.blurple())
@@ -666,17 +677,17 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="Verificare", value="/setup-verificare", inline=False)
     embed.add_field(name="Bun venit", value="/setup-welcome", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
- 
- 
+
+
 # ---------------- ECONOMIE ----------------
- 
+
 @bot.tree.command(name="balance", description="Arată balanța")
 async def balance(interaction: discord.Interaction, membru: Optional[discord.Member] = None):
     target = membru or interaction.user
     coins = get_coins(interaction.guild.id, target.id)
     await interaction.response.send_message(f"💰 {target.mention} are **{coins} coins**.")
- 
- 
+
+
 @bot.tree.command(name="daily", description="Primește recompensa zilnică")
 async def daily(interaction: discord.Interaction):
     ensure_economy(interaction.guild.id, interaction.user.id)
@@ -703,8 +714,8 @@ async def daily(interaction: discord.Interaction):
             (reward, now.isoformat(), interaction.guild.id, interaction.user.id),
         )
     await interaction.response.send_message(f"🎁 Ai primit **{reward} coins**.")
- 
- 
+
+
 @bot.tree.command(name="work", description="Muncește pentru coins")
 async def work(interaction: discord.Interaction):
     ensure_economy(interaction.guild.id, interaction.user.id)
@@ -731,8 +742,8 @@ async def work(interaction: discord.Interaction):
         )
     jobs = ["programator", "șofer", "bucătar", "constructor", "designer"]
     await interaction.response.send_message(f"🛠️ Ai lucrat ca **{random.choice(jobs)}** și ai primit **{reward} coins**.")
- 
- 
+
+
 @bot.tree.command(name="shop", description="Arată magazinul")
 async def shop(interaction: discord.Interaction):
     embed = discord.Embed(title="🛒 Magazin", color=discord.Color.blue())
@@ -741,8 +752,8 @@ async def shop(interaction: discord.Interaction):
     embed.add_field(name="🔥 ELITE", value="**50.000 coins**", inline=False)
     embed.set_footer(text="Folosește /buy <vip | mvp | elite>")
     await interaction.response.send_message(embed=embed)
- 
- 
+
+
 @bot.tree.command(name="buy", description="Cumpără un obiect")
 @app_commands.describe(obiect="Numele obiectului din /shop")
 async def buy(interaction: discord.Interaction, obiect: str):
@@ -763,8 +774,8 @@ async def buy(interaction: discord.Interaction, obiect: str):
             (interaction.guild.id, interaction.user.id, item),
         )
     await interaction.response.send_message(f"✅ Ai cumpărat **{item}** pentru **{price} coins**.")
- 
- 
+
+
 @bot.tree.command(name="leaderboard", description="Clasamentul economiei")
 async def leaderboard(interaction: discord.Interaction):
     with db() as con:
@@ -781,45 +792,45 @@ async def leaderboard(interaction: discord.Interaction):
         name = member.mention if member else f"<@{row['user_id']}>"
         lines.append(f"**{i}.** {name} — {row['coins']} coins")
     await interaction.response.send_message("🏆 **Leaderboard economie**\n" + "\n".join(lines))
- 
- 
+
+
 @bot.tree.command(name="setcoins", description="Setează coins unui membru")
 async def setcoins(interaction: discord.Interaction, membru: discord.Member, suma: app_commands.Range[int, 0, 100000000]):
     if not await require_admin(interaction):
         return
     set_coins_db(interaction.guild.id, membru.id, suma)
     await interaction.response.send_message(f"✅ {membru.mention} are acum **{suma} coins**.")
- 
- 
+
+
 @bot.tree.command(name="addcoins", description="Adaugă coins unui membru")
 async def addcoins(interaction: discord.Interaction, membru: discord.Member, suma: app_commands.Range[int, 1, 100000000]):
     if not await require_admin(interaction):
         return
     total = add_coins_db(interaction.guild.id, membru.id, suma)
     await interaction.response.send_message(f"✅ Am adăugat **{suma} coins**. Total: **{total}**.")
- 
- 
+
+
 @bot.tree.command(name="removecoins", description="Elimină coins unui membru")
 async def removecoins(interaction: discord.Interaction, membru: discord.Member, suma: app_commands.Range[int, 1, 100000000]):
     if not await require_admin(interaction):
         return
     total = add_coins_db(interaction.guild.id, membru.id, -suma)
     await interaction.response.send_message(f"✅ Am eliminat **{suma} coins**. Total: **{total}**.")
- 
- 
+
+
 @bot.tree.command(name="resetcoins", description="Resetează coins unui membru")
 async def resetcoins(interaction: discord.Interaction, membru: discord.Member):
     if not await require_admin(interaction):
         return
     set_coins_db(interaction.guild.id, membru.id, 0)
     await interaction.response.send_message(f"✅ Coins resetați pentru {membru.mention}.")
- 
- 
+
+
 # ---------------- REPUTAȚIE ----------------
- 
+
 rep = app_commands.Group(name="rep", description="Comenzi de reputație")
- 
- 
+
+
 @rep.command(name="add", description="Adaugă reputație")
 async def rep_add(interaction: discord.Interaction, membru: discord.Member, puncte: app_commands.Range[int, 1, 100] = 1):
     if not await require_admin(interaction):
@@ -831,8 +842,8 @@ async def rep_add(interaction: discord.Interaction, membru: discord.Member, punc
             (interaction.guild.id, membru.id, puncte),
         )
     await interaction.response.send_message(f"✅ Am adăugat **{puncte} rep** lui {membru.mention}.")
- 
- 
+
+
 @rep.command(name="remove", description="Elimină reputație")
 async def rep_remove(interaction: discord.Interaction, membru: discord.Member, puncte: app_commands.Range[int, 1, 100] = 1):
     if not await require_admin(interaction):
@@ -850,8 +861,8 @@ async def rep_remove(interaction: discord.Interaction, membru: discord.Member, p
             (interaction.guild.id, membru.id, new),
         )
     await interaction.response.send_message(f"✅ {membru.mention} are acum **{new} rep**.")
- 
- 
+
+
 @rep.command(name="check", description="Verifică reputația")
 async def rep_check(interaction: discord.Interaction, membru: Optional[discord.Member] = None):
     target = membru or interaction.user
@@ -862,8 +873,8 @@ async def rep_check(interaction: discord.Interaction, membru: Optional[discord.M
         ).fetchone()
     points = int(row["points"]) if row else 0
     await interaction.response.send_message(f"⭐ {target.mention} are **{points} rep**.")
- 
- 
+
+
 @rep.command(name="leaderboard", description="Clasamentul reputației")
 async def rep_leaderboard(interaction: discord.Interaction):
     with db() as con:
@@ -876,21 +887,21 @@ async def rep_leaderboard(interaction: discord.Interaction):
         return
     text = "\n".join(f"**{i}.** <@{r['user_id']}> — {r['points']} rep" for i, r in enumerate(rows, 1))
     await interaction.response.send_message("⭐ **Leaderboard reputație**\n" + text)
- 
- 
+
+
 bot.tree.add_command(rep)
- 
- 
+
+
 # ---------------- DISTRACȚIE ----------------
- 
+
 async def fetch_json(url: str) -> dict:
     timeout = aiohttp.ClientTimeout(total=10)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(url) as response:
             response.raise_for_status()
             return await response.json()
- 
- 
+
+
 @bot.tree.command(name="dog", description="Trimite o imagine cu un câine")
 async def dog(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -901,15 +912,15 @@ async def dog(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed)
     except Exception:
         await interaction.followup.send("❌ Nu am putut încărca imaginea.")
- 
- 
+
+
 @bot.tree.command(name="cat", description="Trimite o imagine cu o pisică")
 async def cat(interaction: discord.Interaction):
     embed = discord.Embed(title="🐱 Pisică")
     embed.set_image(url=f"https://cataas.com/cat?width=700&height=500&ts={random.randint(1, 999999)}")
     await interaction.response.send_message(embed=embed)
- 
- 
+
+
 @bot.tree.command(name="meme", description="Trimite un meme aleatoriu")
 async def meme(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -921,10 +932,10 @@ async def meme(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed)
     except Exception:
         await interaction.followup.send("❌ Nu am putut încărca meme-ul.")
- 
- 
+
+
 # ---------------- VERIFICARE ----------------
- 
+
 @bot.tree.command(name="setup-verificare", description="Configurează verificarea cu buton")
 @app_commands.describe(rol="Rolul primit după verificare", canal="Canalul mesajului")
 async def setup_verificare(
@@ -960,6 +971,6 @@ async def setup_verificare(
         f"✅ Verificarea a fost configurată în {canal.mention}.",
         ephemeral=True,
     )
- 
- 
+
+
 bot.run(TOKEN)
