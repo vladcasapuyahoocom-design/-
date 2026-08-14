@@ -48,9 +48,15 @@ def init_db() -> None:
                 coins INTEGER NOT NULL DEFAULT 0,
                 last_daily TEXT,
                 last_work TEXT,
+                last_hourly TEXT,
                 PRIMARY KEY (guild_id, user_id)
             )
         """)
+        existing_columns = {
+            row["name"] for row in con.execute("PRAGMA table_info(economy)").fetchall()
+        }
+        if "last_hourly" not in existing_columns:
+            con.execute("ALTER TABLE economy ADD COLUMN last_hourly TEXT")
         con.execute("""
             CREATE TABLE IF NOT EXISTS inventory (
                 guild_id INTEGER NOT NULL,
@@ -677,7 +683,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="Moderare", value="/ban /kick /clear /timeout /untimeout /warn /warnings /unwarn", inline=False)
     embed.add_field(name="Giveaway", value="/gcreate /gend /reroll", inline=False)
     embed.add_field(name="Utilitare", value="/embed /help", inline=False)
-    embed.add_field(name="Economie", value="/balance /daily /work /shop /buy /pacanele /leaderboard /setcoins /addcoins /removecoins /resetcoins", inline=False)
+    embed.add_field(name="Economie", value="/balance /daily /orar /work /shop /buy /pacanele /leaderboard /setcoins /addcoins /removecoins /resetcoins", inline=False)
     embed.add_field(name="Reputație", value="/rep add /rep remove /rep check /rep leaderboard", inline=False)
     embed.add_field(name="Distracție", value="/dog /cat /meme", inline=False)
     embed.add_field(name="Verificare", value="/setup-verificare", inline=False)
@@ -720,6 +726,34 @@ async def daily(interaction: discord.Interaction):
             (reward, now.isoformat(), interaction.guild.id, interaction.user.id),
         )
     await interaction.response.send_message(f"🎁 Ai primit **{reward} coins**.")
+ 
+ 
+@bot.tree.command(name="orar", description="Primește recompensa orară")
+async def orar(interaction: discord.Interaction):
+    ensure_economy(interaction.guild.id, interaction.user.id)
+    now = datetime.now(timezone.utc)
+    with db() as con:
+        row = con.execute(
+            "SELECT last_hourly FROM economy WHERE guild_id=? AND user_id=?",
+            (interaction.guild.id, interaction.user.id),
+        ).fetchone()
+        if row["last_hourly"]:
+            last = datetime.fromisoformat(row["last_hourly"])
+            remaining = timedelta(hours=1) - (now - last)
+            if remaining.total_seconds() > 0:
+                minutes = int(remaining.total_seconds() // 60)
+                seconds = int(remaining.total_seconds() % 60)
+                await interaction.response.send_message(
+                    f"⏳ Revino peste **{minutes}m {seconds}s**.",
+                    ephemeral=True,
+                )
+                return
+        reward = random.randint(100, 300)
+        con.execute(
+            "UPDATE economy SET coins=coins+?, last_hourly=? WHERE guild_id=? AND user_id=?",
+            (reward, now.isoformat(), interaction.guild.id, interaction.user.id),
+        )
+    await interaction.response.send_message(f"🕐 Ai primit **{reward} coins**.")
  
  
 @bot.tree.command(name="work", description="Muncește pentru coins")
@@ -1055,3 +1089,4 @@ async def setup_verificare(
  
  
 bot.run(TOKEN)
+ 
