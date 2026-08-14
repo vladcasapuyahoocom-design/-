@@ -1,4 +1,3 @@
-
 import os
 import random
 import sqlite3
@@ -678,7 +677,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="Moderare", value="/ban /kick /clear /timeout /untimeout /warn /warnings /unwarn", inline=False)
     embed.add_field(name="Giveaway", value="/gcreate /gend /reroll", inline=False)
     embed.add_field(name="Utilitare", value="/embed /help", inline=False)
-    embed.add_field(name="Economie", value="/balance /daily /work /shop /buy /leaderboard /setcoins /addcoins /removecoins /resetcoins", inline=False)
+    embed.add_field(name="Economie", value="/balance /daily /work /shop /buy /pacanele /leaderboard /setcoins /addcoins /removecoins /resetcoins", inline=False)
     embed.add_field(name="Reputație", value="/rep add /rep remove /rep check /rep leaderboard", inline=False)
     embed.add_field(name="Distracție", value="/dog /cat /meme", inline=False)
     embed.add_field(name="Verificare", value="/setup-verificare", inline=False)
@@ -788,6 +787,74 @@ async def buy(interaction: discord.Interaction, obiect: str):
         )
     else:
         await interaction.response.send_message(f"✅ Ai cumpărat **{item}** pentru **{price} coins**.")
+ 
+ 
+SLOT_SYMBOLS = {
+    "🍒": 35,
+    "🍋": 25,
+    "🍇": 20,
+    "⭐": 12,
+    "💎": 6,
+    "7️⃣": 2,
+}
+ 
+SLOT_PAYOUTS = {
+    "7️⃣": 20,
+    "💎": 12,
+    "⭐": 8,
+    "🍇": 5,
+    "🍋": 4,
+    "🍒": 3,
+}
+SLOT_TWO_MATCH_MULTIPLIER = 1.5
+ 
+ 
+def spin_slots() -> list[str]:
+    symbols = list(SLOT_SYMBOLS.keys())
+    weights = list(SLOT_SYMBOLS.values())
+    return random.choices(symbols, weights=weights, k=3)
+ 
+ 
+@bot.tree.command(name="pacanele", description="Joacă la păcănele cu coins")
+@app_commands.describe(miza="Câți coins pariezi")
+async def pacanele(interaction: discord.Interaction, miza: app_commands.Range[int, 10, 1000000]):
+    coins = get_coins(interaction.guild.id, interaction.user.id)
+    if coins < miza:
+        await interaction.response.send_message("❌ Nu ai destui coins pentru această miză.", ephemeral=True)
+        return
+ 
+    result = spin_slots()
+ 
+    if result[0] == result[1] == result[2]:
+        multiplier = SLOT_PAYOUTS[result[0]]
+        winnings = int(miza * multiplier)
+        outcome = f"🎉 JACKPOT! Trei simboluri identice — câștigi **x{multiplier}**!"
+    elif result[0] == result[1] or result[1] == result[2] or result[0] == result[2]:
+        winnings = int(miza * SLOT_TWO_MATCH_MULTIPLIER)
+        outcome = f"✨ Două simboluri identice — câștigi **x{SLOT_TWO_MATCH_MULTIPLIER}**!"
+    else:
+        winnings = 0
+        outcome = "💀 Nicio combinație. Ai pierdut miza."
+ 
+    net = winnings - miza
+    add_coins_db(interaction.guild.id, interaction.user.id, net)
+    new_balance = get_coins(interaction.guild.id, interaction.user.id)
+ 
+    embed = discord.Embed(
+        title="🎰 Păcănele",
+        description=f"[ {result[0]} | {result[1]} | {result[2]} ]",
+        color=discord.Color.gold() if winnings > 0 else discord.Color.red(),
+    )
+    embed.add_field(name="Miză", value=f"{miza} coins", inline=True)
+    embed.add_field(name="Rezultat", value=outcome, inline=False)
+    if winnings > 0:
+        embed.add_field(name="Câștig", value=f"+{net} coins", inline=True)
+    else:
+        embed.add_field(name="Pierdere", value=f"-{miza} coins", inline=True)
+    embed.add_field(name="Balanță nouă", value=f"{new_balance} coins", inline=True)
+    embed.set_footer(text=f"{interaction.user}")
+ 
+    await interaction.response.send_message(embed=embed)
  
  
 @bot.tree.command(name="leaderboard", description="Clasamentul economiei")
@@ -988,4 +1055,3 @@ async def setup_verificare(
  
  
 bot.run(TOKEN)
- 
