@@ -823,14 +823,7 @@ async def buy(interaction: discord.Interaction, obiect: str):
         await interaction.response.send_message(f"✅ Ai cumpărat **{item}** pentru **{price} coins**.")
  
  
-SLOT_SYMBOLS = {
-    "🍒": 35,
-    "🍋": 25,
-    "🍇": 20,
-    "⭐": 12,
-    "💎": 6,
-    "7️⃣": 2,
-}
+SLOT_SYMBOLS = ["🍒", "🍋", "🍇", "⭐", "💎", "7️⃣"]
  
 SLOT_PAYOUTS = {
     "7️⃣": 20,
@@ -842,11 +835,27 @@ SLOT_PAYOUTS = {
 }
 SLOT_TWO_MATCH_MULTIPLIER = 1.5
  
+# Șanse fixe, indiferent de simboluri:
+SLOT_JACKPOT_CHANCE = 3.25   # %
+SLOT_TWO_MATCH_CHANCE = 35  # %
+# restul (61.75%) e pierdere
  
-def spin_slots() -> list[str]:
-    symbols = list(SLOT_SYMBOLS.keys())
-    weights = list(SLOT_SYMBOLS.values())
-    return random.choices(symbols, weights=weights, k=3)
+ 
+def spin_slots() -> tuple[list[str], str]:
+    roll = random.uniform(0, 100)
+ 
+    if roll < SLOT_JACKPOT_CHANCE:
+        symbol = random.choice(SLOT_SYMBOLS)
+        return [symbol, symbol, symbol], "jackpot"
+ 
+    if roll < SLOT_JACKPOT_CHANCE + SLOT_TWO_MATCH_CHANCE:
+        pair_symbol, other_symbol = random.sample(SLOT_SYMBOLS, 2)
+        result = [pair_symbol, pair_symbol, other_symbol]
+        random.shuffle(result)
+        return result, "two_match"
+ 
+    a, b, c = random.sample(SLOT_SYMBOLS, 3)
+    return [a, b, c], "loss"
  
  
 @bot.tree.command(name="pacanele", description="Joacă la păcănele cu coins")
@@ -857,13 +866,13 @@ async def pacanele(interaction: discord.Interaction, miza: app_commands.Range[in
         await interaction.response.send_message("❌ Nu ai destui coins pentru această miză.", ephemeral=True)
         return
  
-    result = spin_slots()
+    result, kind = spin_slots()
  
-    if result[0] == result[1] == result[2]:
+    if kind == "jackpot":
         multiplier = SLOT_PAYOUTS[result[0]]
         winnings = int(miza * multiplier)
         outcome = f"🎉 JACKPOT! Trei simboluri identice — câștigi **x{multiplier}**!"
-    elif result[0] == result[1] or result[1] == result[2] or result[0] == result[2]:
+    elif kind == "two_match":
         winnings = int(miza * SLOT_TWO_MATCH_MULTIPLIER)
         outcome = f"✨ Două simboluri identice — câștigi **x{SLOT_TWO_MATCH_MULTIPLIER}**!"
     else:
