@@ -339,10 +339,10 @@ async def on_member_join(member: discord.Member):
     member_count = member.guild.member_count
  
     embed = discord.Embed(
-        title="❄️ Bun venit pe Glacial!",
+        title="❄️ Bun venit pe District69 !",
         description=(
-            f"Salut, {member.mention}! 🧊\n"
-            f"Ești al **#{member_count}**-lea membru pe **Glacial**.\n\n"
+            f"Salut, {member.mention}!"
+            f"Ești al **#{member_count}**-lea membru pe **District69 **.\n\n"
             "📜 Citește regulamentul și distrează-te alături de comunitate!\n"
             "💬 Dacă ai nevoie de ajutor, echipa de staff este mereu aici pentru tine."
         ),
@@ -351,7 +351,7 @@ async def on_member_join(member: discord.Member):
     embed.add_field(name="👥 Membri", value=f"#{member_count}", inline=True)
     embed.add_field(name="📅 Cont creat", value=created_at, inline=True)
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="Glacial • Welcome System")
+    embed.set_footer(text="District69  • Welcome System")
  
     try:
         await channel.send(content=member.mention, embed=embed)
@@ -372,10 +372,10 @@ async def setup_welcome(interaction: discord.Interaction, canal: discord.TextCha
         )
  
     preview = discord.Embed(
-        title="❄️ Bun venit pe Glacial!",
+        title="❄️ Bun venit pe District69 !",
         description=(
             "Salut, @membru! 🧊\n"
-            "Ești al **#N**-lea membru pe **Glacial**.\n\n"
+            "Ești al **#N**-lea membru pe **District69 **.\n\n"
             "📜 Citește regulamentul și distrează-te alături de comunitate!\n"
             "💬 Dacă ai nevoie de ajutor, echipa de staff este mereu aici pentru tine."
         ),
@@ -383,7 +383,7 @@ async def setup_welcome(interaction: discord.Interaction, canal: discord.TextCha
     )
     preview.add_field(name="👥 Membri", value="#N", inline=True)
     preview.add_field(name="📅 Cont creat", value="dd/mm/yyyy", inline=True)
-    preview.set_footer(text="Glacial • Welcome System")
+    preview.set_footer(text="District69  • Welcome System")
     await canal.send(embed=preview)
  
     await interaction.response.send_message(
