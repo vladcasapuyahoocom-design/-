@@ -339,7 +339,7 @@ async def on_member_join(member: discord.Member):
     member_count = member.guild.member_count
  
     embed = discord.Embed(
-        title="❄️ Bun venit pe District69 !",
+        title="Bun venit pe District69 !",
         description=(
             f"Salut, {member.mention}!"
             f"Ești al **#{member_count}**-lea membru pe **District69 **.\n\n"
