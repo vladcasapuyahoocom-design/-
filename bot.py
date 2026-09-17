@@ -105,6 +105,12 @@ def init_db() -> None:
                 channel_id INTEGER NOT NULL
             )
         """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS suggestion_config (
+                guild_id INTEGER PRIMARY KEY,
+                channel_id INTEGER NOT NULL
+            )
+        """)
  
  
 def ensure_economy(guild_id: int, user_id: int) -> None:
@@ -688,6 +694,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="Distracție", value="/dog /cat /meme", inline=False)
     embed.add_field(name="Verificare", value="/setup-verificare", inline=False)
     embed.add_field(name="Bun venit", value="/setup-welcome", inline=False)
+    embed.add_field(name="Sugestii", value="/suggest /setup-suggestii", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
  
  
@@ -1093,6 +1100,72 @@ async def setup_verificare(
         )
     await interaction.response.send_message(
         f"✅ Verificarea a fost configurată în {canal.mention}.",
+        ephemeral=True,
+    )
+ 
+ 
+# ---------------- SUGESTII ----------------
+ 
+@bot.tree.command(name="setup-suggestii", description="Configurează canalul de sugestii")
+@app_commands.describe(canal="Canalul unde vor apărea sugestiile")
+async def setup_suggestii(interaction: discord.Interaction, canal: discord.TextChannel):
+    if not await require_admin(interaction):
+        return
+    with db() as con:
+        con.execute(
+            """INSERT INTO suggestion_config (guild_id, channel_id) VALUES (?, ?)
+               ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id""",
+            (interaction.guild.id, canal.id),
+        )
+    await interaction.response.send_message(
+        f"✅ Canalul de sugestii a fost setat la {canal.mention}.",
+        ephemeral=True,
+    )
+ 
+ 
+@bot.tree.command(name="suggest", description="Trimite o sugestie pentru server")
+@app_commands.describe(sugestie="Textul sugestiei tale")
+async def suggest(interaction: discord.Interaction, sugestie: str):
+    if interaction.guild is None:
+        return
+    with db() as con:
+        row = con.execute(
+            "SELECT channel_id FROM suggestion_config WHERE guild_id=?",
+            (interaction.guild.id,),
+        ).fetchone()
+    if not row:
+        await interaction.response.send_message(
+            "❌ Sistemul de sugestii nu este configurat. Un admin trebuie să folosească /setup-suggestii.",
+            ephemeral=True,
+        )
+        return
+ 
+    channel = interaction.guild.get_channel(int(row["channel_id"]))
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message("❌ Canalul de sugestii nu mai există.", ephemeral=True)
+        return
+ 
+    embed = discord.Embed(
+        title="💡 Sugestie nouă",
+        description=sugestie,
+        color=discord.Color.blurple(),
+    )
+    embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+    embed.set_footer(text=f"ID membru: {interaction.user.id}")
+ 
+    try:
+        message = await channel.send(embed=embed)
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "❌ Botul nu poate trimite mesaje în canalul de sugestii.", ephemeral=True
+        )
+        return
+ 
+    await message.add_reaction("👍")
+    await message.add_reaction("👎")
+ 
+    await interaction.response.send_message(
+        f"✅ Sugestia ta a fost trimisă în {channel.mention}!",
         ephemeral=True,
     )
  
