@@ -29,7 +29,9 @@ SHOP_ITEMS = {
     "vip": 10000,
     "mvp": 25000,
     "elite": 50000,
-} 
+}
+ 
+ 
 def db() -> sqlite3.Connection:
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
@@ -794,8 +796,7 @@ async def shop(interaction: discord.Interaction):
     embed.add_field(name="👑 VIP", value="**10.000 coins**", inline=False)
     embed.add_field(name="💎 MVP", value="**25.000 coins**", inline=False)
     embed.add_field(name="🔥 ELITE", value="**50.000 coins**", inline=False)
-    embed.add_field(name="🎭 Custom Role", value="**75.000 coins**", inline=False)
-    embed.set_footer(text="Folosește /buy <vip | mvp | elite | custom role>")
+    embed.set_footer(text="Folosește /buy <vip | mvp | elite>")
     await interaction.response.send_message(embed=embed)
  
  
@@ -818,13 +819,7 @@ async def buy(interaction: discord.Interaction, obiect: str):
                ON CONFLICT(guild_id,user_id,item) DO UPDATE SET amount=amount+1""",
             (interaction.guild.id, interaction.user.id, item),
         )
-    if item == "custom role":
-        await interaction.response.send_message(
-            f"✅ Ai cumpărat **{item}** pentru **{price} coins**.\n"
-            "🎭 Un membru al echipei de staff te va contacta pentru a stabili numele și culoarea rolului tău personalizat.",
-        )
-    else:
-        await interaction.response.send_message(f"✅ Ai cumpărat **{item}** pentru **{price} coins**.")
+    await interaction.response.send_message(f"✅ Ai cumpărat **{item}** pentru **{price} coins**.")
  
  
 SLOT_SYMBOLS = ["🍒", "🍋", "🍇", "⭐", "💎", "7️⃣"]
