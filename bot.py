@@ -29,9 +29,7 @@ SHOP_ITEMS = {
     "vip": 10000,
     "mvp": 25000,
     "elite": 50000,
-}
- 
- 
+} 
 def db() -> sqlite3.Connection:
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
