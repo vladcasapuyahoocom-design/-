@@ -29,7 +29,6 @@ SHOP_ITEMS = {
     "vip": 10000,
     "mvp": 25000,
     "elite": 50000,
-    "custom role": 75000,
 }
  
  
