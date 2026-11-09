@@ -1,4 +1,6 @@
 import os
+import re
+import json
 import random
 import sqlite3
 import asyncio
@@ -325,6 +327,19 @@ async def on_ready():
     print(f"{bot.user} este online!")
  
  
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        msg = "❌ Nu ai permisiunea necesară pentru această comandă."
+    else:
+        print(f"Eroare comandă: {error}")
+        msg = "❌ A apărut o eroare."
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
+ 
+ 
 # ---------------- BUN VENIT ----------------
  
 @bot.event
@@ -435,6 +450,7 @@ async def setup_ticket(
         color=discord.Color.blurple(),
     )
     await interaction.response.send_message(embed=embed, view=TicketView())
+ 
  
 @bot.tree.command(name="ban", description="Banează un membru")
 @app_commands.describe(membru="Membrul", motiv="Motivul")
@@ -691,6 +707,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="Economie", value="/balance /daily /orar /work /shop /buy /pacanele /leaderboard /setcoins /addcoins /removecoins /resetcoins", inline=False)
     embed.add_field(name="Reputație", value="/rep add /rep remove /rep check /rep leaderboard", inline=False)
     embed.add_field(name="Distracție", value="/dog /cat /meme", inline=False)
+    embed.add_field(name="Numărătoare", value="/setcount /removecount /countset /countstats /countleaderboard", inline=False)
     embed.add_field(name="Verificare", value="/setup-verificare", inline=False)
     embed.add_field(name="Bun venit", value="/setup-welcome", inline=False)
     embed.add_field(name="Sugestii", value="/suggest /setup-suggestii", inline=False)
@@ -779,7 +796,7 @@ async def work(interaction: discord.Interaction):
                 await interaction.response.send_message(
                     f"⏳ Mai așteaptă **{minutes} minute**.",
                     ephemeral=True,
-                )       
+                )
                 return
         reward = random.randint(40, 120)
         con.execute(
@@ -1055,6 +1072,242 @@ async def meme(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed)
     except Exception:
         await interaction.followup.send("❌ Nu am putut încărca meme-ul.")
+ 
+ 
+# ---------------- NUMĂRĂTOARE ----------------
+ 
+COUNT_CONFIG_FILE = "counting_config.json"
+ 
+# Aceeași persoană poate număra de două ori la rând? (False = nu)
+PERMITE_ACELASI_USER = False
+# Șterge mesajele din canal care nu sunt numere? (False = se poate vorbi liber)
+STERGE_MESAJE_NON_NUMERE = True
+ 
+NUMBER_RE = re.compile(r"^\d+$")
+ 
+ 
+def load_count_config() -> dict:
+    if not os.path.exists(COUNT_CONFIG_FILE):
+        return {}
+    try:
+        with open(COUNT_CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+ 
+ 
+def save_count_config() -> None:
+    with open(COUNT_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(count_config, f, indent=4)
+ 
+ 
+count_config: dict = load_count_config()
+count_locks: dict[int, asyncio.Lock] = {}
+ 
+ 
+def count_lock(guild_id: int) -> asyncio.Lock:
+    return count_locks.setdefault(guild_id, asyncio.Lock())
+ 
+ 
+def count_get(guild_id: int) -> Optional[dict]:
+    return count_config.get(str(guild_id))
+ 
+ 
+def count_new_entry(channel_id: int) -> dict:
+    return {
+        "channel": channel_id,
+        "current": 0,
+        "last_user": None,
+        "last_message": None,
+        "highscore": 0,
+        "total_corecte": 0,
+        "total_gresite": 0,
+        "users": {},  # user_id -> numere corecte
+    }
+ 
+ 
+@bot.tree.command(name="setcount", description="Setează canalul unde se numără")
+@app_commands.describe(canal="Canalul de numărat")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def setcount(interaction: discord.Interaction, canal: discord.TextChannel):
+    existent = count_get(interaction.guild_id)
+    if existent:
+        existent["channel"] = canal.id
+    else:
+        count_config[str(interaction.guild_id)] = count_new_entry(canal.id)
+    save_count_config()
+    await interaction.response.send_message(
+        f"✅ Canalul de numărat este acum {canal.mention}. Începeți de la **1**!",
+        ephemeral=True,
+    )
+    try:
+        await canal.send("🔢 **Numărătoarea a început!** Primul număr este **1**.")
+    except discord.HTTPException:
+        pass
+ 
+ 
+@bot.tree.command(name="removecount", description="Oprește sistemul de numărat")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def removecount(interaction: discord.Interaction):
+    count_config.pop(str(interaction.guild_id), None)
+    save_count_config()
+    await interaction.response.send_message("🗑️ Sistemul de numărat a fost oprit.", ephemeral=True)
+ 
+ 
+@bot.tree.command(name="countset", description="Setează manual numărul curent")
+@app_commands.describe(numar="Numărul de la care se continuă (ultimul număr valid)")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def countset(interaction: discord.Interaction, numar: app_commands.Range[int, 0]):
+    data = count_get(interaction.guild_id)
+    if not data:
+        return await interaction.response.send_message(
+            "❌ Nu e setat niciun canal. Folosește `/setcount`.", ephemeral=True
+        )
+    data["current"] = numar
+    data["last_user"] = None
+    data["last_message"] = None
+    save_count_config()
+    await interaction.response.send_message(
+        f"✅ Numărul curent este **{numar}**. Următorul: **{numar + 1}**.", ephemeral=True
+    )
+ 
+ 
+@bot.tree.command(name="countstats", description="Statistici despre numărătoare")
+async def countstats(interaction: discord.Interaction):
+    data = count_get(interaction.guild_id)
+    if not data:
+        return await interaction.response.send_message(
+            "❌ Sistemul de numărat nu e activ aici.", ephemeral=True
+        )
+    embed = discord.Embed(title="🔢 Statistici numărătoare", color=discord.Color.blurple())
+    embed.add_field(name="Canal", value=f"<#{data['channel']}>", inline=True)
+    embed.add_field(name="Număr curent", value=str(data["current"]), inline=True)
+    embed.add_field(name="Următorul", value=str(data["current"] + 1), inline=True)
+    embed.add_field(name="🏆 Record", value=str(data["highscore"]), inline=True)
+    embed.add_field(name="✅ Corecte", value=str(data["total_corecte"]), inline=True)
+    embed.add_field(name="❌ Greșeli", value=str(data["total_gresite"]), inline=True)
+    await interaction.response.send_message(embed=embed)
+ 
+ 
+@bot.tree.command(name="countleaderboard", description="Top 10 numărători")
+async def countleaderboard(interaction: discord.Interaction):
+    data = count_get(interaction.guild_id)
+    if not data or not data["users"]:
+        return await interaction.response.send_message(
+            "Încă nu a numărat nimeni.", ephemeral=True
+        )
+    top = sorted(data["users"].items(), key=lambda x: x[1], reverse=True)[:10]
+    medalii = ["🥇", "🥈", "🥉"]
+    linii = []
+    for i, (uid, nr) in enumerate(top):
+        prefix = medalii[i] if i < 3 else f"**{i + 1}.**"
+        linii.append(f"{prefix} <@{uid}> — **{nr}** numere")
+    embed = discord.Embed(
+        title="🏅 Top numărători", description="\n".join(linii), color=discord.Color.gold()
+    )
+    await interaction.response.send_message(embed=embed)
+ 
+ 
+@bot.listen("on_message")
+async def counting_on_message(message: discord.Message):
+    if message.guild is None or message.author.bot:
+        return
+    data = count_get(message.guild.id)
+    if not data or message.channel.id != data["channel"]:
+        return
+ 
+    content = message.content.strip()
+    if not NUMBER_RE.match(content):
+        if STERGE_MESAJE_NON_NUMERE:
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+        return  # mesaj normal, ignorat
+ 
+    async with count_lock(message.guild.id):
+        numar = int(content)
+        asteptat = data["current"] + 1
+        uid = message.author.id
+ 
+        # aceeași persoană de două ori la rând
+        if not PERMITE_ACELASI_USER and data["last_user"] == uid:
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+            await message.channel.send(
+                f"⚠️ {message.author.mention}, nu poți număra de două ori la rând!",
+                delete_after=5,
+            )
+            return
+ 
+        # număr greșit
+        if numar != asteptat:
+            data["total_gresite"] += 1
+            ruinat_la = data["current"]
+            data["current"] = 0
+            data["last_user"] = None
+            data["last_message"] = None
+            save_count_config()
+            try:
+                await message.add_reaction("❌")
+            except discord.HTTPException:
+                pass
+            await message.channel.send(
+                f"❌ {message.author.mention} a stricat numărătoarea la **{ruinat_la}**! "
+                f"Era rândul lui **{asteptat}**.\n"
+                f"Recordul serverului: **{data['highscore']}**. Reîncepem de la **1**."
+            )
+            return
+ 
+        # număr corect
+        data["current"] = numar
+        data["last_user"] = uid
+        data["last_message"] = message.id
+        data["total_corecte"] += 1
+        data["users"][str(uid)] = data["users"].get(str(uid), 0) + 1
+        record_nou = numar > data["highscore"]
+        if record_nou:
+            data["highscore"] = numar
+        save_count_config()
+ 
+        try:
+            await message.add_reaction("🏆" if record_nou and numar > 1 else "✅")
+            if numar % 100 == 0:
+                await message.add_reaction("💯")
+                await message.channel.send(f"🎉 Felicitări! Ați ajuns la **{numar}**!")
+        except discord.HTTPException:
+            pass
+ 
+ 
+# Anti-trișat: mesaj de număr șters / editat
+@bot.listen("on_message_delete")
+async def counting_on_message_delete(message: discord.Message):
+    if message.guild is None:
+        return
+    data = count_get(message.guild.id)
+    if not data or message.channel.id != data["channel"]:
+        return
+    if data["last_message"] == message.id:
+        await message.channel.send(
+            f"🗑️ {message.author.mention} a șters ultimul număr (**{data['current']}**). "
+            f"Următorul număr este **{data['current'] + 1}**."
+        )
+ 
+ 
+@bot.listen("on_message_edit")
+async def counting_on_message_edit(before: discord.Message, after: discord.Message):
+    if before.guild is None:
+        return
+    data = count_get(before.guild.id)
+    if not data or before.channel.id != data["channel"]:
+        return
+    if data["last_message"] == before.id and before.content != after.content:
+        await after.channel.send(
+            f"✏️ {after.author.mention} a editat ultimul număr! "
+            f"Numărul corect era **{data['current']}**, următorul este **{data['current'] + 1}**."
+        )
  
  
 # ---------------- VERIFICARE ----------------
