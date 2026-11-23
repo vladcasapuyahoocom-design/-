@@ -1,9 +1,11 @@
 import os
 import re
 import json
+import time
 import random
 import sqlite3
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -21,6 +23,7 @@ intents.members = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+log = logging.getLogger(__name__)
 DB_PATH = "bot.db"
 
 # giveaway_message_id -> date
@@ -248,12 +251,419 @@ class TicketView(discord.ui.View):
         )
 
 
+# ---------------- APLICAȚII STAFF ----------------
+
+APPLY_CONFIG_FILE = "apply_config.json"
+APPLY_COLOR = 0x1A1A1A
+ANSWER_TIMEOUT = 900        # secunde per răspuns (15 minute)
+MAX_ANSWER = 900            # caractere maxime per răspuns
+APPLY_COOLDOWN = 6 * 3600   # pauză între două aplicații ale aceluiași utilizator
+CANCEL_WORDS = {"anulează", "anuleaza", "anulare", "cancel"}
+
+QUESTIONS = [
+    "Care este numele tău de Discord?",
+    "Câți ani ai?",
+    "Din ce țară ești și ce fus orar ai?",
+    "De cât timp faci parte din comunitatea noastră?",
+    "Cât timp poți acorda serverului zilnic?",
+    "Ai mai avut experiență ca staff pe alte servere Discord? Dacă da, unde și ce grad ai avut?",
+    "De ce dorești să faci parte din echipa staff F4DED?",
+    "Ce calități consideri că te recomandă pentru acest rol?",
+    "Care crezi că este responsabilitatea principală a unui moderator?",
+    "Cum ai proceda dacă doi membri se ceartă și încep să folosească un limbaj vulgar?",
+    "Ce ai face dacă un membru încalcă regulile, dar este prietenul tău?",
+    "Cum ai reacționa dacă un membru al staff-ului cu grad mai mare ar încălca regulamentul?",
+    "Ce ai face dacă ai sancționat un membru, iar acesta consideră că sancțiunea este nedreaptă?",
+    "Cum ai proceda dacă observi că un coleg din staff abuzează de comenzile de moderare?",
+    "Ai ceva de adăugat sau dorești să ne transmiți un mesaj final?",
+]
+
+
+def load_apply_config() -> dict:
+    if os.path.exists(APPLY_CONFIG_FILE):
+        try:
+            with open(APPLY_CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_apply_config(data: dict) -> None:
+    with open(APPLY_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+
+def get_owner_id(guild_id: int) -> Optional[int]:
+    cfg = load_apply_config().get(str(guild_id), {})
+    if cfg.get("owner"):
+        return cfg["owner"]
+    guild = bot.get_guild(guild_id)
+    return guild.owner_id if guild else None
+
+
+def build_pages(answers: list[str]) -> list[list[tuple[str, str]]]:
+    """Împarte răspunsurile în pagini, ca să nu depășească limita de 6000 de caractere a unui embed."""
+    pages, fields, size = [], [], 0
+    for index, (question, answer) in enumerate(zip(QUESTIONS, answers), 1):
+        name = f"{index}. {question}"[:256]
+        value = answer[:1024]
+        if fields and size + len(name) + len(value) > 4500:
+            pages.append(fields)
+            fields, size = [], 0
+        fields.append((name, value))
+        size += len(name) + len(value)
+    if fields:
+        pages.append(fields)
+    return pages
+
+
+class ApplyPanel(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Aplică pentru staff",
+        style=discord.ButtonStyle.primary,
+        custom_id="fd_apply:start",
+    )
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cog: "StaffApply" = interaction.client.get_cog("StaffApply")
+        await cog.start_application(interaction)
+
+
+class ReviewView(discord.ui.View):
+    """Butoanele pe care le vede owner-ul sub aplicație."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _decide(self, interaction: discord.Interaction, accepted: bool):
+        embed = interaction.message.embeds[0] if interaction.message.embeds else None
+        footer = embed.footer.text if embed and embed.footer else ""
+        match = re.search(r"ID:(\d+) \| G:(\d+)", footer or "")
+        if not match:
+            return await interaction.response.send_message(
+                "Nu am putut citi datele aplicației.", ephemeral=True
+            )
+
+        user_id, guild_id = int(match.group(1)), int(match.group(2))
+        owner_id = get_owner_id(guild_id)
+        if interaction.user.id != owner_id:
+            return await interaction.response.send_message(
+                "Doar owner-ul poate decide asupra aplicațiilor.", ephemeral=True
+            )
+
+        notified = True
+        try:
+            applicant = await interaction.client.fetch_user(user_id)
+            if accepted:
+                text = (
+                    "Felicitări! Aplicația ta pentru echipa staff F4DED a fost **acceptată**. "
+                    "Vei fi contactat în curând de echipă."
+                )
+                color = 0x2ECC71
+            else:
+                text = (
+                    "Aplicația ta pentru echipa staff F4DED a fost analizată și, momentan, "
+                    "**nu a fost acceptată**. Poți aplica din nou pe viitor."
+                )
+                color = 0xE74C3C
+            await applicant.send(embed=discord.Embed(title="Aplicație staff", description=text, color=color))
+        except (discord.Forbidden, discord.HTTPException):
+            notified = False
+
+        embed.color = 0x2ECC71 if accepted else 0xE74C3C
+        embed.add_field(
+            name="Decizie",
+            value=(
+                ("Acceptată" if accepted else "Respinsă")
+                + f" de {interaction.user.mention}"
+                + ("" if notified else "\nCandidatul nu a putut fi notificat (mesaje private închise).")
+            ),
+            inline=False,
+        )
+        view = ReviewView()
+        for child in view.children:
+            child.disabled = True
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    @discord.ui.button(label="Acceptă", style=discord.ButtonStyle.success, custom_id="fd_apply:accept")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._decide(interaction, True)
+
+    @discord.ui.button(label="Respinge", style=discord.ButtonStyle.danger, custom_id="fd_apply:reject")
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._decide(interaction, False)
+
+
+class StaffApply(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.active: set[int] = set()
+        self.last_submit: dict[int, float] = {}
+        self._tasks: set[asyncio.Task] = set()
+
+    async def cog_load(self):
+        self.bot.add_view(ApplyPanel())
+        self.bot.add_view(ReviewView())
+
+    async def start_application(self, interaction: discord.Interaction):
+        user = interaction.user
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message(
+                "Apasă butonul de pe server.", ephemeral=True
+            )
+
+        await interaction.response.defer(ephemeral=True)
+
+        if user.id in self.active:
+            return await interaction.followup.send(
+                "Ai deja o aplicație în desfășurare. Verifică mesajele private.", ephemeral=True
+            )
+
+        remaining = APPLY_COOLDOWN - (time.time() - self.last_submit.get(user.id, 0))
+        if remaining > 0:
+            return await interaction.followup.send(
+                f"Ai trimis deja o aplicație recent. Poți aplica din nou peste {int(remaining // 60) + 1} minute.",
+                ephemeral=True,
+            )
+
+        intro = discord.Embed(
+            title="Aplicație staff F4DED",
+            description=(
+                "Vei primi pe rând 15 întrebări. Răspunde la fiecare cu un mesaj aici, în privat.\n\n"
+                f"• Un răspuns poate avea maxim **{MAX_ANSWER}** de caractere.\n"
+                f"• Ai **{ANSWER_TIMEOUT // 60} minute** pentru fiecare răspuns.\n"
+                "• Scrie `anulează` oricând pentru a opri aplicația.\n\n"
+                "Răspunde sincer și detaliat. Mult succes!"
+            ),
+            color=APPLY_COLOR,
+        )
+
+        try:
+            dm = await user.create_dm()
+            await dm.send(embed=intro)
+        except discord.Forbidden:
+            return await interaction.followup.send(
+                "Nu îți pot trimite mesaje private. Activează „Mesaje directe” de la membrii "
+                "serverului în setările de confidențialitate, apoi apasă din nou pe buton.",
+                ephemeral=True,
+            )
+
+        self.active.add(user.id)
+        await interaction.followup.send(
+            "Ți-am trimis întrebările în privat. Continuă conversația acolo.", ephemeral=True
+        )
+
+        task = asyncio.create_task(self.run_application(user, guild, dm))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def run_application(self, member: discord.Member, guild: discord.Guild, dm: discord.DMChannel):
+        answers: list[str] = []
+
+        def check(m: discord.Message) -> bool:
+            return m.author.id == member.id and m.channel.id == dm.id
+
+        try:
+            for index, question in enumerate(QUESTIONS, 1):
+                embed = discord.Embed(
+                    title=f"Întrebarea {index}/{len(QUESTIONS)}",
+                    description=question,
+                    color=APPLY_COLOR,
+                )
+                embed.set_footer(text="Scrie „anulează” pentru a opri aplicația.")
+                await dm.send(embed=embed)
+
+                while True:
+                    try:
+                        msg = await self.bot.wait_for("message", check=check, timeout=ANSWER_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        await dm.send(
+                            "Sesiunea a expirat din cauza inactivității. "
+                            "Apasă din nou pe butonul de aplicare de pe server pentru a relua."
+                        )
+                        return
+
+                    content = msg.content.strip()
+                    if content.lower() in CANCEL_WORDS:
+                        await dm.send("Aplicația a fost anulată.")
+                        return
+                    if not content:
+                        await dm.send("Trimite răspunsul sub formă de text.")
+                        continue
+                    if len(content) > MAX_ANSWER:
+                        await dm.send(
+                            f"Răspunsul tău are {len(content)} de caractere, iar limita este {MAX_ANSWER}. "
+                            "Scurtează-l și trimite-l din nou."
+                        )
+                        continue
+
+                    answers.append(content)
+                    break
+
+            delivered = await self.deliver(guild, member, answers)
+            if delivered:
+                self.last_submit[member.id] = time.time()
+                await dm.send(
+                    embed=discord.Embed(
+                        title="Aplicație trimisă",
+                        description=(
+                            "Mulțumim! Aplicația ta a fost trimisă către owner. "
+                            "Vei primi un mesaj privat când se ia o decizie."
+                        ),
+                        color=APPLY_COLOR,
+                    )
+                )
+            else:
+                await dm.send(
+                    "Nu am putut trimite aplicația către owner. Te rugăm să contactezi un membru al echipei."
+                )
+        except discord.Forbidden:
+            log.warning("Utilizatorul %s a închis mesajele private în timpul aplicației", member.id)
+        except Exception:
+            log.exception("Eroare în timpul aplicației staff")
+        finally:
+            self.active.discard(member.id)
+
+    async def deliver(self, guild: discord.Guild, member: discord.Member, answers: list[str]) -> bool:
+        cfg = load_apply_config().get(str(guild.id), {})
+        owner_id = cfg.get("owner") or guild.owner_id
+
+        header = discord.Embed(
+            title="Aplicație staff nouă",
+            description=f"{member.mention} a completat aplicația pentru echipa staff.",
+            color=APPLY_COLOR,
+        )
+        header.add_field(name="Utilizator", value=f"{member} (`{member.id}`)", inline=False)
+        header.add_field(name="Cont creat", value=discord.utils.format_dt(member.created_at, "R"), inline=True)
+        if member.joined_at:
+            header.add_field(
+                name="Pe server din", value=discord.utils.format_dt(member.joined_at, "R"), inline=True
+            )
+        header.add_field(name="Trimisă", value=discord.utils.format_dt(discord.utils.utcnow(), "F"), inline=True)
+        header.set_thumbnail(url=member.display_avatar.url)
+        header.set_footer(text=f"ID:{member.id} | G:{guild.id}")
+
+        pages = build_pages(answers)
+        page_embeds = []
+        for number, fields in enumerate(pages, 1):
+            page = discord.Embed(title=f"Răspunsuri ({number}/{len(pages)})", color=APPLY_COLOR)
+            for name, value in fields:
+                page.add_field(name=name, value=value, inline=False)
+            page_embeds.append(page)
+
+        async def send_all(destination):
+            await destination.send(embed=header, view=ReviewView())
+            for page in page_embeds:
+                await destination.send(embed=page)
+
+        try:
+            owner = await self.bot.fetch_user(owner_id)
+            await send_all(owner)
+            return True
+        except (discord.Forbidden, discord.HTTPException):
+            log.warning("Nu am putut trimite aplicația în privat către owner")
+
+        channel_id = cfg.get("channel")
+        channel = guild.get_channel(channel_id) if channel_id else None
+        if channel:
+            try:
+                await send_all(channel)
+                return True
+            except discord.HTTPException:
+                log.exception("Nu am putut trimite aplicația nici în canalul de rezervă")
+
+        return False
+
+    @app_commands.command(name="apply-config", description="Setează cine primește aplicațiile de staff")
+    @app_commands.describe(
+        owner="Persoana care primește aplicațiile în privat",
+        canal="Canal de rezervă, dacă mesajele private ale owner-ului sunt închise (opțional)",
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def apply_config(
+        self,
+        interaction: discord.Interaction,
+        owner: discord.User,
+        canal: Optional[discord.TextChannel] = None,
+    ):
+        data = load_apply_config()
+        cfg = data.setdefault(str(interaction.guild.id), {})
+        cfg["owner"] = owner.id
+        if canal:
+            cfg["channel"] = canal.id
+        save_apply_config(data)
+
+        text = f"Aplicațiile vor ajunge în privat la {owner.mention}."
+        if canal:
+            text += f"\nCanal de rezervă: {canal.mention}"
+        await interaction.response.send_message(
+            text, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+        )
+
+    @app_commands.command(name="apply-panel", description="Postează panoul de aplicații pentru staff")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def apply_panel(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="F4DED  /  APLICAȚIE STAFF",
+            description=(
+                "Vrei să faci parte din echipa noastră?\n"
+                "Apasă pe buton, iar botul îți va trimite întrebările în privat."
+            ),
+            color=APPLY_COLOR,
+        )
+        embed.add_field(
+            name="Cum funcționează",
+            value="Răspunzi la 15 întrebări în mesaje private, iar răspunsurile ajung direct la owner.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Înainte să aplici",
+            value="Activează mesajele private de la membrii serverului, altfel botul nu îți poate scrie.",
+            inline=False,
+        )
+        embed.set_footer(text="F4DED  •  RECRUTARE STAFF")
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.channel.send(embed=embed, view=ApplyPanel())
+        except discord.Forbidden:
+            return await interaction.followup.send(
+                "Nu am putut posta panoul. Dă-mi permisiunile **View Channel**, "
+                "**Send Messages** și **Embed Links** în acest canal.",
+                ephemeral=True,
+            )
+        await interaction.followup.send("Panoul de aplicații a fost postat.", ephemeral=True)
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        original = getattr(error, "original", error)
+        if isinstance(error, app_commands.MissingPermissions):
+            msg = "Ai nevoie de permisiunea `Manage Server` pentru această comandă."
+        else:
+            log.error("Eroare în comanda de aplicații", exc_info=original)
+            msg = f"Eroare: `{type(original).__name__}: {original}`"
+
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+
+
 @bot.event
 async def on_ready():
     init_db()
     bot.add_view(VerifyView())
     bot.add_view(TicketView())
     bot.add_view(CloseTicketView())
+    if bot.get_cog("StaffApply") is None:
+        await bot.add_cog(StaffApply(bot))
     try:
         synced = await bot.tree.sync()
         print(f"Sincronizate {len(synced)} comenzi slash.")
@@ -645,6 +1055,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="Verificare", value="/setup-verificare", inline=False)
     embed.add_field(name="Bun venit", value="/setup-welcome", inline=False)
     embed.add_field(name="Sugestii", value="/suggest /setup-suggestii", inline=False)
+    embed.add_field(name="Aplicații staff", value="/apply-config /apply-panel", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
