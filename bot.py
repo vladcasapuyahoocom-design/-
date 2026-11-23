@@ -267,7 +267,7 @@ QUESTIONS = [
     "De cât timp faci parte din comunitatea noastră?",
     "Cât timp poți acorda serverului zilnic?",
     "Ai mai avut experiență ca staff pe alte servere Discord? Dacă da, unde și ce grad ai avut?",
-    "De ce dorești să faci parte din echipa staff F4DED?",
+    "De ce dorești să faci parte din echipa staff 𝐃𝐀𝐑𝐊𝐒𝐈𝐃𝐄?",
     "Ce calități consideri că te recomandă pentru acest rol?",
     "Care crezi că este responsabilitatea principală a unui moderator?",
     "Cum ai proceda dacă doi membri se ceartă și încep să folosească un limbaj vulgar?",
@@ -359,13 +359,13 @@ class ReviewView(discord.ui.View):
             applicant = await interaction.client.fetch_user(user_id)
             if accepted:
                 text = (
-                    "Felicitări! Aplicația ta pentru echipa staff F4DED a fost **acceptată**. "
+                    "Felicitări! Aplicația ta pentru echipa staff 𝐃𝐀𝐑𝐊𝐒𝐈𝐃𝐄 a fost **acceptată**. "
                     "Vei fi contactat în curând de echipă."
                 )
                 color = 0x2ECC71
             else:
                 text = (
-                    "Aplicația ta pentru echipa staff F4DED a fost analizată și, momentan, "
+                    "Aplicația ta pentru echipa staff 𝐃𝐀𝐑𝐊𝐒𝐈𝐃𝐄 a fost analizată și, momentan, "
                     "**nu a fost acceptată**. Poți aplica din nou pe viitor."
                 )
                 color = 0xE74C3C
@@ -431,7 +431,7 @@ class StaffApply(commands.Cog):
             )
 
         intro = discord.Embed(
-            title="Aplicație staff F4DED",
+            title="Aplicație staff 𝐃𝐀𝐑𝐊𝐒𝐈𝐃𝐄",
             description=(
                 "Vei primi pe rând 15 întrebări. Răspunde la fiecare cu un mesaj aici, în privat.\n\n"
                 f"• Un răspuns poate avea maxim **{MAX_ANSWER}** de caractere.\n"
@@ -612,7 +612,7 @@ class StaffApply(commands.Cog):
     @app_commands.checks.has_permissions(manage_guild=True)
     async def apply_panel(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="F4DED  /  APLICAȚIE STAFF",
+            title="𝐃𝐀𝐑𝐊𝐒𝐈𝐃𝐄  /  APLICAȚIE STAFF",
             description=(
                 "Vrei să faci parte din echipa noastră?\n"
                 "Apasă pe buton, iar botul îți va trimite întrebările în privat."
@@ -629,7 +629,7 @@ class StaffApply(commands.Cog):
             value="Activează mesajele private de la membrii serverului, altfel botul nu îți poate scrie.",
             inline=False,
         )
-        embed.set_footer(text="F4DED  •  RECRUTARE STAFF")
+        embed.set_footer(text="𝐃𝐀𝐑𝐊𝐒𝐈𝐃𝐄  •  RECRUTARE STAFF")
 
         await interaction.response.defer(ephemeral=True)
         try:
