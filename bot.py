@@ -84,6 +84,16 @@ def init_db() -> None:
                 channel_id INTEGER NOT NULL
             )
         """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS profiles (
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                age INTEGER NOT NULL,
+                hobbies TEXT NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        """)
 
 
 def is_admin(member: discord.Member) -> bool:
@@ -1050,6 +1060,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="Giveaway", value="/gcreate /gend /reroll", inline=False)
     embed.add_field(name="Utilitare", value="/embed /help", inline=False)
     embed.add_field(name="Reputație", value="/rep add /rep remove /rep check /rep leaderboard", inline=False)
+    embed.add_field(name="Profil", value="/profile /profile-set /profile-delete", inline=False)
     embed.add_field(name="Distracție", value="/dog /cat /meme", inline=False)
     embed.add_field(name="Numărătoare", value="/setcount /removecount /countset /countstats /countleaderboard", inline=False)
     embed.add_field(name="Verificare", value="/setup-verificare", inline=False)
@@ -1123,6 +1134,174 @@ async def rep_leaderboard(interaction: discord.Interaction):
 
 
 bot.tree.add_command(rep)
+
+
+# ---------------- PROFIL ----------------
+
+PROFILE_TIMEOUT = 300  # secunde per răspuns (5 minute)
+PROFILE_CANCEL = {"anulează", "anuleaza", "anulare", "cancel"}
+profile_active: set[int] = set()
+
+
+async def run_profile_questions(user: discord.User, guild: discord.Guild, dm: discord.DMChannel):
+    def check(m: discord.Message) -> bool:
+        return m.author.id == user.id and m.channel.id == dm.id
+
+    async def ask(text: str) -> Optional[str]:
+        """Pune o întrebare și returnează răspunsul, sau None dacă s-a anulat / a expirat."""
+        await dm.send(text)
+        try:
+            msg = await bot.wait_for("message", check=check, timeout=PROFILE_TIMEOUT)
+        except asyncio.TimeoutError:
+            await dm.send("⏰ Timpul a expirat. Folosește din nou `/profile-set` pentru a relua.")
+            return None
+        content = msg.content.strip()
+        if content.lower() in PROFILE_CANCEL:
+            await dm.send("❌ Crearea profilului a fost anulată.")
+            return None
+        return content
+
+    try:
+        # 1. Nume
+        while True:
+            nume = await ask("**1. Nume:**")
+            if nume is None:
+                return
+            if 1 <= len(nume) <= 50:
+                break
+            await dm.send("⚠️ Numele trebuie să aibă între 1 și 50 de caractere. Încearcă din nou.")
+
+        # 2. Vârstă
+        while True:
+            varsta = await ask("**2. Vârstă:**")
+            if varsta is None:
+                return
+            if varsta.isdigit() and 1 <= int(varsta) <= 99:
+                break
+            await dm.send("⚠️ Scrie vârsta doar ca număr, între 1 și 99. Încearcă din nou.")
+
+        # 3. Hobby-uri
+        while True:
+            hobby = await ask("**3. Hobby-uri:**")
+            if hobby is None:
+                return
+            if 1 <= len(hobby) <= 300:
+                break
+            await dm.send("⚠️ Hobby-urile trebuie să aibă între 1 și 300 de caractere. Încearcă din nou.")
+
+        with db() as con:
+            con.execute(
+                """INSERT INTO profiles (guild_id, user_id, name, age, hobbies)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(guild_id, user_id) DO UPDATE SET
+                   name=excluded.name, age=excluded.age, hobbies=excluded.hobbies""",
+                (guild.id, user.id, nume, int(varsta), hobby),
+            )
+
+        await dm.send(
+            f"✅ Profilul tău a fost salvat pe **{guild.name}**! Scrie `/profile` pe server ca să-l vezi."
+        )
+    except discord.Forbidden:
+        pass
+    except Exception:
+        log.exception("Eroare la crearea profilului")
+    finally:
+        profile_active.discard(user.id)
+
+
+@bot.tree.command(name="profile-set", description="Creează sau editează profilul tău (răspunzi la întrebări în privat)")
+@app_commands.guild_only()
+async def profile_set(interaction: discord.Interaction):
+    user = interaction.user
+
+    if user.id in profile_active:
+        await interaction.response.send_message(
+            "❌ Ai deja o sesiune de profil în desfășurare. Verifică mesajele private.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        dm = await user.create_dm()
+        await dm.send(
+            "👤 **Creare profil**\n"
+            "Îți voi pune 3 întrebări. Răspunde la fiecare cu un mesaj aici.\n"
+            "Scrie `anulează` oricând pentru a opri."
+        )
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "❌ Nu îți pot trimite mesaje private. Activează „Mesaje directe” de la membrii "
+            "serverului în setările de confidențialitate și încearcă din nou.",
+            ephemeral=True,
+        )
+        return
+
+    profile_active.add(user.id)
+    await interaction.followup.send("📩 Ți-am trimis întrebările în privat. Continuă acolo!", ephemeral=True)
+
+    task = asyncio.create_task(run_profile_questions(user, interaction.guild, dm))
+    task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
+
+@bot.tree.command(name="profile-delete", description="Șterge profilul tău")
+@app_commands.guild_only()
+async def profile_delete(interaction: discord.Interaction):
+    with db() as con:
+        cur = con.execute(
+            "DELETE FROM profiles WHERE guild_id=? AND user_id=?",
+            (interaction.guild.id, interaction.user.id),
+        )
+    if cur.rowcount:
+        await interaction.response.send_message("🗑️ Profilul tău a fost șters.", ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Nu ai un profil creat.", ephemeral=True)
+
+
+@bot.tree.command(name="profile", description="Arată profilul unui membru")
+@app_commands.describe(membru="Membrul al cărui profil vrei să-l vezi (implicit: tu)")
+@app_commands.guild_only()
+async def profile(interaction: discord.Interaction, membru: Optional[discord.Member] = None):
+    target = membru or interaction.user
+    guild = interaction.guild
+
+    with db() as con:
+        prof = con.execute(
+            "SELECT name, age, hobbies FROM profiles WHERE guild_id=? AND user_id=?",
+            (guild.id, target.id),
+        ).fetchone()
+        row = con.execute(
+            "SELECT points FROM reputation WHERE guild_id=? AND user_id=?",
+            (guild.id, target.id),
+        ).fetchone()
+        points = int(row["points"]) if row else 0
+
+    if not prof:
+        if target == interaction.user:
+            msg = "❌ Nu ai un profil încă. Creează-l cu `/profile-set`."
+        else:
+            msg = f"❌ {target.display_name} nu și-a creat încă profilul."
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
+
+    culoare = target.color if target.color.value else discord.Color.from_rgb(26, 26, 26)
+    embed = discord.Embed(title=f"👤 Profilul lui {target.display_name}", color=culoare)
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.add_field(name="📛 Nume", value=prof["name"], inline=True)
+    embed.add_field(name="🎂 Vârstă", value=str(prof["age"]), inline=True)
+    embed.add_field(name="⭐ Reputație", value=f"{points} rep", inline=True)
+    embed.add_field(name="🎮 Hobby-uri", value=prof["hobbies"], inline=False)
+    embed.add_field(
+        name="📅 Cont creat", value=discord.utils.format_dt(target.created_at, "R"), inline=True
+    )
+    if target.joined_at:
+        embed.add_field(
+            name="📥 Pe server din", value=discord.utils.format_dt(target.joined_at, "R"), inline=True
+        )
+    embed.set_footer(text="DARKSIDE  • Profil")
+    await interaction.response.send_message(
+        embed=embed, allowed_mentions=discord.AllowedMentions.none()
+    )
 
 
 # ---------------- DISTRACȚIE ----------------
